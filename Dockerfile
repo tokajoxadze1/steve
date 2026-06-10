@@ -1,33 +1,25 @@
-# Build stage
-FROM eclipse-temurin:17-jdk AS builder
+FROM eclipse-temurin:21-jdk
 
-WORKDIR /app
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
-# Copy pom.xml and download dependencies
-COPY pom.xml .
-RUN mvn dependency:resolve -q
+MAINTAINER Ling Li
 
-# Copy source code
-COPY src ./src
+# Download and install dockerize.
+# Needed so the web container will wait for MariaDB to start.
+ENV DOCKERIZE_VERSION v0.19.0
+RUN curl -sfL https://github.com/powerman/dockerize/releases/download/"$DOCKERIZE_VERSION"/dockerize-`uname -s`-`uname -m` | install /dev/stdin /usr/local/bin/dockerize
 
-# Build the application
-RUN mvn clean package -DskipTests -q && \
-    mv target/steve-*.jar target/steve.jar
+EXPOSE 8180
+EXPOSE 8443
+WORKDIR /code
 
-# Runtime stage
-FROM eclipse-temurin:17-jre
+VOLUME ["/code"]
 
-WORKDIR /app
+# Copy the application's code
+COPY . /code
 
-# Copy the built JAR from builder stage
-COPY --from=builder /app/target/steve.jar .
-
-# Expose port (Railway will override with $PORT)
-EXPOSE 8080
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-8080}/steve/manager/ || exit 1
-
-# Start the application
-CMD ["java", "-jar", "steve.jar"]
+# Wait for the db to startup(via dockerize), then 
+# Build and run steve, requires a db to be available on port 3306
+CMD dockerize -wait tcp://mariadb:3306 -timeout 60s && \
+	./mvnw clean package -Pdocker,mariadb -Djdk.tls.client.protocols="TLSv1,TLSv1.1,TLSv1.2" && \
+	java -XX:MaxRAMPercentage=85 -jar target/steve.war
